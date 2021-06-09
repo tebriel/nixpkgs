@@ -42,7 +42,7 @@
 
 let
   version = "2.33";
-  patchSuffix = "-41";
+  patchSuffix = "-42";
   sha256 = "sha256-LiVWAA4QXb1X8Layoy/yzxc73k8Nhd/8z9i35RoGd/8=";
 in
 
