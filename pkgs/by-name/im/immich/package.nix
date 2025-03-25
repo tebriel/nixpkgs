@@ -170,8 +170,6 @@ buildNpmPackage' {
     # some part of the build wants to use un-prefixed binaries. let them.
     mkdir -p $TMP/bin
     ln -s "$(type -p ${stdenv.cc.targetPrefix}pkg-config)" $TMP/bin/pkg-config
-    ln -s "$(type -p ${stdenv.cc.targetPrefix}c++filt)" $TMP/bin/c++filt
-    ln -s "$(type -p ${stdenv.cc.targetPrefix}readelf)" $TMP/bin/readelf
     export PATH="$TMP/bin:$PATH"
   '';
 
