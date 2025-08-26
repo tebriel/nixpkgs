@@ -29,24 +29,44 @@ in
       default = "homebox";
       description = "Group under which Homebox runs.";
     };
-    settings = mkOption {
-      type = types.attrsOf types.str;
-      defaultText = lib.literalExpression ''
-        {
-          HBOX_STORAGE_CONN_STRING = "file:///var/lib/homebox";
-          HBOX_STORAGE_PREFIX_PATH = "data";
-          HBOX_DATABASE_DRIVER = "sqlite3";
-          HBOX_DATABASE_SQLITE_PATH = "/var/lib/homebox/data/homebox.db?_pragma=busy_timeout=999&_pragma=journal_mode=WAL&_fk=1";
-          HBOX_OPTIONS_ALLOW_REGISTRATION = "false";
-          HBOX_OPTIONS_CHECK_GITHUB_RELEASE = "false";
-          HBOX_MODE = "production";
-        }
-      '';
-      description = ''
-        The homebox configuration as Environment variables. For definitions and available options see the upstream
-        [documentation](https://homebox.software/en/configure/#configure-homebox).
-      '';
-    };
+      settings = mkOption {
+        type = types.submodule {
+          # Allow arbitrary environment variables in addition to the structured ones below
+          freeformType = with types; attrsOf str;
+
+          options = {
+            HBOX_STORAGE_CONN_STRING = mkOption {
+              type = types.str;
+              default = "file:///var/lib/homebox";
+              description = "Storage backend connection string (e.g., file:///var/lib/homebox).";
+            };
+            HBOX_STORAGE_PREFIX_PATH = mkOption {
+              type = types.str;
+              description = "Prefix path within the storage backend (e.g., data).";
+              default = ".data";
+            };
+            HBOX_DATABASE_DRIVER = mkOption {
+              type = types.enum [ "sqlite3" "postgres" ];
+              default = "sqlite3";
+              description = "Database driver to use (sqlite3 or postgres).";
+            };
+            HBOX_DATABASE_SQLITE_PATH = mkOption {
+              type = types.str;
+              default = "/var/lib/homebox/.data/homebox.db?_pragma=busy_timeout=999&_pragma=journal_mode=WAL&_fk=1&_time_format=sqlite";
+              description = "Path to the SQLite database file (if using sqlite3).";
+            };
+            HBOX_OPTIONS_GITHUB_RELEASE_CHECK = mkOption {
+              type = types.enum [ "true" "false" ];
+              description = "Whether to check GitHub for new releases (true/false).";
+              default = "false";
+            };
+          };
+        };
+        description = ''
+          The homebox configuration as Environment variables. For definitions and available options see the upstream
+          [documentation](https://homebox.software/en/configure/#configure-homebox).
+        '';
+      };
     database = {
       createLocally = mkOption {
         type = lib.types.bool;
@@ -67,25 +87,6 @@ in
       group = cfg.group;
     };
     users.groups.${cfg.group} = { };
-    services.homebox.settings = lib.mkMerge [
-      (lib.mapAttrs (_: mkDefault) {
-        HBOX_STORAGE_CONN_STRING = "file:///var/lib/homebox";
-        HBOX_STORAGE_PREFIX_PATH = "data";
-        HBOX_DATABASE_DRIVER = "sqlite3";
-        HBOX_DATABASE_SQLITE_PATH = "/var/lib/homebox/data/homebox.db?_pragma=busy_timeout=999&_pragma=journal_mode=WAL&_fk=1";
-        HBOX_OPTIONS_ALLOW_REGISTRATION = "false";
-        HBOX_OPTIONS_CHECK_GITHUB_RELEASE = "false";
-        HBOX_MODE = "production";
-      })
-
-      (lib.mkIf cfg.database.createLocally {
-        HBOX_DATABASE_DRIVER = "postgres";
-        HBOX_DATABASE_HOST = "/run/postgresql";
-        HBOX_DATABASE_USERNAME = "homebox";
-        HBOX_DATABASE_DATABASE = "homebox";
-        HBOX_DATABASE_PORT = toString config.services.postgresql.settings.port;
-      })
-    ];
     services.postgresql = lib.mkIf cfg.database.createLocally {
       enable = true;
       ensureDatabases = [ "homebox" ];
@@ -98,33 +99,30 @@ in
     };
 
     systemd =
-      let
-        workDir =
-          if (lib.strings.hasPrefix "file://" cfg.settings.HBOX_STORAGE_CONN_STRING) then
-            lib.strings.replaceStrings [ "file://" ] [ "" ] cfg.settings.HBOX_STORAGE_CONN_STRING
-          else
-            "/var/lib/homebox";
-        dataDir = "${workDir}/${cfg.settings.HBOX_STORAGE_PREFIX_PATH}";
-      in
       {
-        tmpfiles.rules = [
-          "d '${workDir}' 0700 ${cfg.user} ${cfg.group} - -"
-          "d '${dataDir}' 0700 ${cfg.user} ${cfg.group} - -"
-        ];
         services.homebox = {
           requires = lib.optional cfg.database.createLocally "postgresql.target";
           after = lib.optional cfg.database.createLocally "postgresql.target";
-          environment = cfg.settings;
+          environment =
+            let
+              baseEnv = lib.filterAttrs (_: v: v != null) cfg.settings;
+              dbEnv = lib.optionalAttrs cfg.database.createLocally {
+                HBOX_DATABASE_DRIVER = "postgres";
+                HBOX_DATABASE_HOST = "/run/postgresql";
+                HBOX_DATABASE_USERNAME = "homebox";
+                HBOX_DATABASE_DATABASE = "homebox";
+                HBOX_DATABASE_PORT = toString config.services.postgresql.settings.port;
+              };
+            in baseEnv // dbEnv;
           serviceConfig = {
             User = cfg.user;
             Group = cfg.group;
             ExecStart = lib.getExe cfg.package;
-            WorkingDirectory = workDir;
-            ReadWritePaths = [ workDir ];
             LimitNOFILE = "1048576";
             PrivateTmp = true;
             PrivateDevices = true;
             Restart = "always";
+            StateDirectory = "homebox";
 
             # Hardening
             CapabilityBoundingSet = "";
